@@ -444,7 +444,7 @@ def main():
         print(DIM + "Looking for your computer time..." + RESET)
         now = wait_for_computer_time(read_computer_time(), 2)
         if now is None:
-            print(YELLOW + "Not found. Run ./start.sh to sync automatically." + RESET + "\n")
+            print(YELLOW + "Not found. See README.md to sync automatically." + RESET + "\n")
             state = new_state(ask("Current time (HH:MM or HH:MM:SS, e.g. 14:05): ", parse_time))
         else:
             print(GREEN + "Time synced with your computer: " + format_seconds(now) + RESET + "\n")
