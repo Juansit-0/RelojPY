@@ -164,8 +164,8 @@ RING_SECONDS = 30
 REVERSE = "\033[7m"
 
 
-def new_state(now):
-    return {"now": now, "alarm": None, "alarm_ring": 0, "stopwatch": 0, "stopwatch_on": False, "timer": None, "timer_ring": 0}
+def new_state(now, synced=False):
+    return {"now": now, "synced": synced, "alarm": None, "alarm_ring": 0, "stopwatch": 0, "stopwatch_on": False, "timer": None, "timer_ring": 0}
 
 
 def advance(state, seconds=1):
@@ -189,6 +189,10 @@ def status_line(label, value, color):
 
 
 def status_lines(state):
+    if state["synced"]:
+        source = status_line("Time", "synced with your computer", GREEN)
+    else:
+        source = status_line("Time", "manual, may drift", DIM)
     if state["alarm"] is None:
         alarm = status_line("Alarm", "off", DIM)
     else:
@@ -201,7 +205,7 @@ def status_lines(state):
         timer = status_line("Timer", "off", DIM)
     else:
         timer = status_line("Timer", format_seconds(state["timer"]) + "  left", YELLOW)
-    return [alarm, stopwatch, timer]
+    return [source, alarm, stopwatch, timer]
 
 
 def banner(text, now):
@@ -291,9 +295,48 @@ HIDE_CURSOR = "\033[?25l"
 SHOW_CURSOR = "\033[?25h"
 
 
-def wait_one_second():
-    for _ in range(LOOPS_PER_SECOND):
+SYNC_FILE = ".now"
+POLLS_PER_SECOND = 20
+
+
+def spin(loops):
+    for _ in range(loops):
         pass
+
+
+def read_computer_time():
+    try:
+        with open(SYNC_FILE) as file:
+            return parse_time(file.read())[0]
+    except OSError:
+        return None
+
+
+def wait_for_computer_time(previous, seconds):
+    for _ in range(seconds * POLLS_PER_SECOND):
+        spin(LOOPS_PER_SECOND // POLLS_PER_SECOND)
+        now = read_computer_time()
+        if now is not None and now != previous:
+            return now
+    return None
+
+
+def elapsed_until(state, now):
+    elapsed = (now - state["now"]) % 86400
+    if elapsed > 43200:
+        state["now"] = now
+        return 0
+    return elapsed
+
+
+def wait_next_second(state):
+    if state["synced"]:
+        now = wait_for_computer_time(state["now"], 2)
+        if now is not None:
+            return elapsed_until(state, now)
+        state["synced"] = False
+    spin(LOOPS_PER_SECOND)
+    return 1
 
 
 def run_clock(state):
@@ -302,8 +345,7 @@ def run_clock(state):
         while True:
             bell = "\a" if state["alarm_ring"] > 0 or state["timer_ring"] > 0 else ""
             print(CLEAR + build_screen(state) + bell, flush=True)
-            wait_one_second()
-            advance(state)
+            advance(state, wait_next_second(state))
     except KeyboardInterrupt:
         pass
     finally:
@@ -364,7 +406,8 @@ def menu(state):
     message = ""
     while True:
         options = menu_options(state)
-        print(CLEAR + BOLD + CYAN + "MENU" + RESET + "  " + DIM + "(the clock is paused while the menu is open)" + RESET + "\n")
+        note = "the clock keeps running" if state["synced"] else "the clock is paused while the menu is open"
+        print(CLEAR + BOLD + CYAN + "MENU" + RESET + "  " + DIM + "(" + note + ")" + RESET + "\n")
         print("\n".join(status_lines(state)) + "\n")
         for number in range(len(options)):
             print("  " + BOLD + str(number + 1) + ")" + RESET + " " + options[number][0])
@@ -378,6 +421,13 @@ def menu(state):
         label, action = options[int(choice) - 1]
         if label == "Quit":
             return False
+        if label == "Back to clock" and state["synced"]:
+            now = read_computer_time()
+            if now is None:
+                state["synced"] = False
+            else:
+                advance(state, elapsed_until(state, now))
+                return True
         if label == "Back to clock":
             text = "Current time (HH:MM or HH:MM:SS, Enter to keep " + format_seconds(state["now"]) + "): "
             now = ask(text, parse_time, True)
@@ -391,7 +441,14 @@ def main():
     self_test()
     print(CLEAR + BOLD + CYAN + "PYTHON CLOCK" + RESET + "\n")
     try:
-        state = new_state(ask("Current time (HH:MM or HH:MM:SS, e.g. 14:05): ", parse_time))
+        print(DIM + "Looking for your computer time..." + RESET)
+        now = wait_for_computer_time(read_computer_time(), 2)
+        if now is None:
+            print(YELLOW + "Not found. Run ./start.sh to sync automatically." + RESET + "\n")
+            state = new_state(ask("Current time (HH:MM or HH:MM:SS, e.g. 14:05): ", parse_time))
+        else:
+            print(GREEN + "Time synced with your computer: " + format_seconds(now) + RESET + "\n")
+            state = new_state(now, True)
         state["alarm"] = ask("Alarm time (HH:MM, e.g. 07:30, or Enter for no alarm): ", parse_time, True)
         while True:
             run_clock(state)
