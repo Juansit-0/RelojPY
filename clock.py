@@ -160,15 +160,57 @@ def center(text, visible_length, width=WIDTH):
     return " " * max(0, (width - visible_length) // 2) + text
 
 
-def build_screen(seconds_of_day):
+RING_SECONDS = 30
+REVERSE = "\033[7m"
+
+
+def new_state(now):
+    return {"now": now, "alarm": None, "alarm_ring": 0}
+
+
+def advance(state):
+    state["now"] = tick(state["now"])
+    if state["alarm_ring"] > 0:
+        state["alarm_ring"] -= 1
+    if state["alarm"] is not None and state["now"] == state["alarm"]:
+        state["alarm_ring"] = RING_SECONDS
+
+
+def status_line(label, value, color):
+    return "     " + BOLD + (label + ":").ljust(12) + RESET + color + value + RESET
+
+
+def status_lines(state):
+    if state["alarm"] is None:
+        alarm = status_line("Alarm", "off", DIM)
+    else:
+        alarm = status_line("Alarm", format_seconds(state["alarm"]), YELLOW)
+    return [alarm]
+
+
+def banner(text, now):
+    style = YELLOW + BOLD + (REVERSE if now % 2 == 0 else "")
+    return center(style + "  " + text + "  " + RESET, len(text) + 4)
+
+
+def build_screen(state):
+    now = state["now"]
     lines = [center(BOLD + CYAN + "PYTHON CLOCK" + RESET, 12), ""]
-    lines += draw_face(seconds_of_day)
+    lines += draw_face(now)
     lines.append("")
-    for row in big_text(format_seconds(seconds_of_day)):
+    for row in big_text(format_seconds(now)):
         lines.append(center(BOLD + WHITE + row + RESET, len(row)))
     lines.append("")
     legend = CYAN + "# hour" + RESET + "   " + GREEN + "* minute" + RESET + "   " + RED + ". second" + RESET
     lines.append(center(legend, 28))
+    lines.append("")
+    lines += status_lines(state)
+    lines.append("")
+    if state["alarm_ring"] > 0:
+        lines.append(banner("ALARM!  Press Ctrl+C to stop", now))
+    else:
+        lines.append("")
+    lines.append(center(DIM + "Press Ctrl+C to open the menu" + RESET, 29))
     return "\n".join(lines)
 
 
@@ -198,6 +240,12 @@ def self_test():
     assert format_seconds(86400) == "00:00:00"
     assert tick(86399) == 0
     assert tick(59) == 60
+    state = new_state(86399)
+    state["alarm"] = 0
+    advance(state)
+    assert state["now"] == 0 and state["alarm_ring"] == RING_SECONDS
+    advance(state)
+    assert state["alarm_ring"] == RING_SECONDS - 1
 
 
 LOOPS_PER_SECOND = 165000000
@@ -216,25 +264,30 @@ def tick(seconds_of_day):
     return (seconds_of_day + 1) % 86400
 
 
-def run_clock(now):
+def run_clock(state):
     print(HIDE_CURSOR, end="")
     try:
         while True:
-            print(CLEAR + build_screen(now), flush=True)
+            bell = "\a" if state["alarm_ring"] > 0 else ""
+            print(CLEAR + build_screen(state) + bell, flush=True)
             wait_one_second()
-            now = tick(now)
+            advance(state)
     except KeyboardInterrupt:
         pass
     finally:
         print(SHOW_CURSOR + RESET)
-    return now
 
 
 def main():
     self_test()
     print(CLEAR + BOLD + CYAN + "PYTHON CLOCK" + RESET + "\n")
-    now = ask("Current time (HH:MM or HH:MM:SS, e.g. 14:05): ", parse_time)
-    run_clock(now)
+    try:
+        state = new_state(ask("Current time (HH:MM or HH:MM:SS, e.g. 14:05): ", parse_time))
+        state["alarm"] = ask("Alarm time (HH:MM, e.g. 07:30, or Enter for no alarm): ", parse_time, True)
+    except (KeyboardInterrupt, EOFError):
+        print("\nGoodbye!")
+        return
+    run_clock(state)
     print("Goodbye!")
 
 
