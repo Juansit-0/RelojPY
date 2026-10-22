@@ -196,8 +196,47 @@ def self_test():
     assert parse_duration("00:00")[0] is None
     assert format_seconds(50700) == "14:05:00"
     assert format_seconds(86400) == "00:00:00"
+    assert tick(86399) == 0
+    assert tick(59) == 60
+
+
+LOOPS_PER_SECOND = 165000000
+
+CLEAR = "\033[H\033[2J\033[3J"
+HIDE_CURSOR = "\033[?25l"
+SHOW_CURSOR = "\033[?25h"
+
+
+def wait_one_second():
+    for _ in range(LOOPS_PER_SECOND):
+        pass
+
+
+def tick(seconds_of_day):
+    return (seconds_of_day + 1) % 86400
+
+
+def run_clock(now):
+    print(HIDE_CURSOR, end="")
+    try:
+        while True:
+            print(CLEAR + build_screen(now), flush=True)
+            wait_one_second()
+            now = tick(now)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print(SHOW_CURSOR + RESET)
+    return now
+
+
+def main():
+    self_test()
+    print(CLEAR + BOLD + CYAN + "PYTHON CLOCK" + RESET + "\n")
+    now = ask("Current time (HH:MM or HH:MM:SS, e.g. 14:05): ", parse_time)
+    run_clock(now)
+    print("Goodbye!")
 
 
 if __name__ == "__main__":
-    self_test()
-    print(build_screen(10 * 3600 + 8 * 60 + 23))
+    main()
