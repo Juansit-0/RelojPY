@@ -79,6 +79,99 @@ def format_seconds(total):
     return "%02d:%02d:%02d" % (total // 3600, total // 60 % 60, total % 60)
 
 
+WIDTH = 45
+HEIGHT = 23
+CENTER_X = 22
+CENTER_Y = 11
+RADIUS_X = 20
+RADIUS_Y = 10
+
+DIGITS = {
+    "0": [" _ ", "| |", "|_|"],
+    "1": ["   ", "  |", "  |"],
+    "2": [" _ ", " _|", "|_ "],
+    "3": [" _ ", " _|", " _|"],
+    "4": ["   ", "|_|", "  |"],
+    "5": [" _ ", "|_ ", " _|"],
+    "6": [" _ ", "|_ ", "|_|"],
+    "7": [" _ ", "  |", "  |"],
+    "8": [" _ ", "|_|", "|_|"],
+    "9": [" _ ", "|_|", " _|"],
+    ":": [" ", ".", "."],
+}
+
+
+def point(angle, length):
+    x = CENTER_X + length * RADIUS_X * sine(angle)
+    y = CENTER_Y - length * RADIUS_Y * cosine(angle)
+    return int(round(x)), int(round(y))
+
+
+def put(canvas, x, y, char, color):
+    if 0 <= y < HEIGHT and 0 <= x < WIDTH:
+        canvas[y][x] = (char, color)
+
+
+def draw_hand(canvas, angle, length, char, color):
+    steps = int(length * 40)
+    for step in range(1, steps + 1):
+        x, y = point(angle, length * step / steps)
+        put(canvas, x, y, char, color)
+
+
+def draw_face(seconds_of_day):
+    canvas = [[(" ", "") for _ in range(WIDTH)] for _ in range(HEIGHT)]
+    for step in range(240):
+        x, y = point(2 * PI * step / 240, 1)
+        put(canvas, x, y, ".", DIM)
+    for minute in range(0, 60, 5):
+        x, y = point(2 * PI * minute / 60, 1)
+        put(canvas, x, y, "+", WHITE)
+    for hour in range(1, 13):
+        label = str(hour)
+        x, y = point(2 * PI * hour / 12, 0.82)
+        for index in range(len(label)):
+            put(canvas, x - len(label) // 2 + index, y, label[index], BOLD + WHITE)
+    hours = seconds_of_day / 3600 % 12
+    minutes = seconds_of_day % 3600 / 60
+    seconds = seconds_of_day % 60
+    draw_hand(canvas, 2 * PI * seconds / 60, 0.7, ".", RED)
+    draw_hand(canvas, 2 * PI * minutes / 60, 0.65, "*", GREEN)
+    draw_hand(canvas, 2 * PI * hours / 12, 0.42, "#", CYAN)
+    put(canvas, CENTER_X, CENTER_Y, "o", BOLD + WHITE)
+    lines = []
+    for row in canvas:
+        line = ""
+        for char, color in row:
+            line += color + char + RESET if color else char
+        lines.append(line)
+    return lines
+
+
+def big_text(text):
+    rows = ["", "", ""]
+    for char in text:
+        for index in range(3):
+            rows[index] += DIGITS[char][index] + " "
+    return rows
+
+
+def center(text, visible_length, width=WIDTH):
+    return " " * max(0, (width - visible_length) // 2) + text
+
+
+def build_screen(seconds_of_day):
+    lines = [center(BOLD + CYAN + "PYTHON CLOCK" + RESET, 12), ""]
+    lines += draw_face(seconds_of_day)
+    lines.append("")
+    for row in big_text(format_seconds(seconds_of_day)):
+        lines.append(center(BOLD + WHITE + row + RESET, len(row)))
+    lines.append("")
+    legend = CYAN + "# hour" + RESET + "   " + GREEN + "* minute" + RESET + "   " + RED + ". second" + RESET
+    lines.append(center(legend, 28))
+    return "\n".join(lines)
+
+
 def close(a, b):
     return abs(a - b) < 1e-9
 
@@ -107,3 +200,4 @@ def self_test():
 
 if __name__ == "__main__":
     self_test()
+    print(build_screen(10 * 3600 + 8 * 60 + 23))
