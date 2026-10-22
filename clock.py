@@ -159,92 +159,393 @@ class ClockFace:
         return lines
 
 
-def big_text(text):
-    rows = ["", "", ""]
-    for char in text:
-        for index in range(3):
-            rows[index] += DIGITS[char][index] + " "
-    return rows
+CLEAR = "\033[H\033[2J\033[3J"
+HIDE_CURSOR = "\033[?25l"
+SHOW_CURSOR = "\033[?25h"
+REVERSE = "\033[7m"
+DAY = 86400
+
+
+def spin(loops):
+    for _ in range(loops):
+        pass
 
 
 def center(text, visible_length, width=WIDTH):
     return " " * max(0, (width - visible_length) // 2) + text
 
 
-RING_SECONDS = 30
-REVERSE = "\033[7m"
+class Feature:
+    name = ""
+
+    def advance(self, start, seconds):
+        pass
+
+    def status(self):
+        return "", DIM
 
 
-def new_state(now, synced=False):
-    return {"now": now, "synced": synced, "alarm": None, "alarm_ring": 0, "stopwatch": 0, "stopwatch_on": False, "timer": None, "timer_ring": 0}
+class Ringer(Feature):
+    RING_SECONDS = 30
+    message = ""
+
+    def __init__(self):
+        self.ring_left = 0
+
+    def ring(self):
+        self.ring_left = self.RING_SECONDS
+
+    def silence(self):
+        self.ring_left = 0
+
+    def is_ringing(self):
+        return self.ring_left > 0
+
+    def advance(self, start, seconds):
+        self.ring_left = max(0, self.ring_left - seconds)
 
 
-def advance(state, seconds=1):
-    start = state["now"]
-    state["now"] = (start + seconds) % 86400
-    state["alarm_ring"] = max(0, state["alarm_ring"] - seconds)
-    state["timer_ring"] = max(0, state["timer_ring"] - seconds)
-    if state["alarm"] is not None and 0 < (state["alarm"] - start) % 86400 <= seconds:
-        state["alarm_ring"] = RING_SECONDS
-    if state["stopwatch_on"]:
-        state["stopwatch"] += seconds
-    if state["timer"] is not None:
-        state["timer"] -= seconds
-        if state["timer"] <= 0:
-            state["timer"] = None
-            state["timer_ring"] = RING_SECONDS
+class Alarm(Ringer):
+    name = "Alarm"
+    message = "ALARM!  Press Ctrl+C to stop"
+
+    def __init__(self):
+        super().__init__()
+        self.time = None
+
+    def set(self, time):
+        self.time = time
+
+    def remove(self):
+        if self.time is None:
+            return False
+        self.time = None
+        return True
+
+    def advance(self, start, seconds):
+        super().advance(start, seconds)
+        if self.time is not None and 0 < (self.time - start) % DAY <= seconds:
+            self.ring()
+
+    def status(self):
+        if self.time is None:
+            return "off", DIM
+        return format_seconds(self.time), YELLOW
 
 
-def status_line(label, value, color):
-    return "     " + BOLD + (label + ":").ljust(12) + RESET + color + value + RESET
+class Timer(Ringer):
+    name = "Timer"
+    message = "TIME UP!  Press Ctrl+C to stop"
+
+    def __init__(self):
+        super().__init__()
+        self.remaining = None
+
+    def set(self, seconds):
+        self.remaining = seconds
+
+    def cancel(self):
+        if self.remaining is None:
+            return False
+        self.remaining = None
+        return True
+
+    def advance(self, start, seconds):
+        super().advance(start, seconds)
+        if self.remaining is not None:
+            self.remaining -= seconds
+            if self.remaining <= 0:
+                self.remaining = None
+                self.ring()
+
+    def status(self):
+        if self.remaining is None:
+            return "off", DIM
+        return format_seconds(self.remaining) + "  left", YELLOW
 
 
-def status_lines(state):
-    if state["synced"]:
-        source = status_line("Time", "synced with your computer", GREEN)
-    else:
-        source = status_line("Time", "manual, may drift", DIM)
-    if state["alarm"] is None:
-        alarm = status_line("Alarm", "off", DIM)
-    else:
-        alarm = status_line("Alarm", format_seconds(state["alarm"]), YELLOW)
-    if state["stopwatch_on"]:
-        stopwatch = status_line("Stopwatch", format_seconds(state["stopwatch"]) + "  running", GREEN)
-    else:
-        stopwatch = status_line("Stopwatch", format_seconds(state["stopwatch"]) + "  stopped", DIM)
-    if state["timer"] is None:
-        timer = status_line("Timer", "off", DIM)
-    else:
-        timer = status_line("Timer", format_seconds(state["timer"]) + "  left", YELLOW)
-    return [source, alarm, stopwatch, timer]
+class Stopwatch(Feature):
+    name = "Stopwatch"
+
+    def __init__(self):
+        self.elapsed = 0
+        self.running = False
+
+    def toggle(self):
+        self.running = not self.running
+        return self.running
+
+    def reset(self):
+        self.elapsed = 0
+        self.running = False
+
+    def advance(self, start, seconds):
+        if self.running:
+            self.elapsed += seconds
+
+    def status(self):
+        if self.running:
+            return format_seconds(self.elapsed) + "  running", GREEN
+        return format_seconds(self.elapsed) + "  stopped", DIM
 
 
-def banner(text, now):
-    style = YELLOW + BOLD + (REVERSE if now % 2 == 0 else "")
-    return center(style + "  " + text + "  " + RESET, len(text) + 4)
+class TimeSource:
+    synced = False
+    menu_note = ""
+
+    def status(self):
+        return "", DIM
+
+    def start_time(self):
+        return 0
+
+    def next_time(self, now):
+        return None
+
+    def after_menu(self, now):
+        return now, False
 
 
-def build_screen(state):
-    now = state["now"]
-    lines = [center(BOLD + CYAN + "PYTHON CLOCK" + RESET, 12), ""]
-    lines += ClockFace().render(now)
-    lines.append("")
-    for row in big_text(format_seconds(now)):
-        lines.append(center(BOLD + WHITE + row + RESET, len(row)))
-    lines.append("")
-    legend = CYAN + "# hour" + RESET + "   " + GREEN + "* minute" + RESET + "   " + RED + ". second" + RESET
-    lines.append(center(legend, 28))
-    lines.append("")
-    lines += status_lines(state)
-    lines.append("")
-    if state["alarm_ring"] > 0:
-        lines.append(banner("ALARM!  Press Ctrl+C to stop", now))
-    elif state["timer_ring"] > 0:
-        lines.append(banner("TIME UP!  Press Ctrl+C to stop", now))
-    else:
+class ManualTime(TimeSource):
+    LOOPS_PER_SECOND = 165000000
+    menu_note = "the clock is paused while the menu is open"
+
+    def status(self):
+        return "manual, may drift", DIM
+
+    def start_time(self):
+        return ask("Current time (HH:MM or HH:MM:SS, e.g. 14:05): ", parse_time)
+
+    def next_time(self, now):
+        spin(self.LOOPS_PER_SECOND)
+        return (now + 1) % DAY
+
+    def after_menu(self, now):
+        text = "Current time (HH:MM or HH:MM:SS, Enter to keep " + format_seconds(now) + "): "
+        typed = ask(text, parse_time, True)
+        return (now if typed is None else typed), False
+
+
+class SyncedTime(TimeSource):
+    FILE = ".now"
+    POLLS_PER_SECOND = 20
+    synced = True
+    menu_note = "the clock keeps running"
+
+    def __init__(self):
+        self.first = None
+
+    def status(self):
+        return "synced with your computer", GREEN
+
+    def read(self):
+        try:
+            with open(self.FILE) as file:
+                return parse_time(file.read())[0]
+        except OSError:
+            return None
+
+    def wait_for_change(self, previous, seconds):
+        for _ in range(seconds * self.POLLS_PER_SECOND):
+            spin(ManualTime.LOOPS_PER_SECOND // self.POLLS_PER_SECOND)
+            now = self.read()
+            if now is not None and now != previous:
+                return now
+        return None
+
+    def connect(self):
+        self.first = self.wait_for_change(self.read(), 2)
+        return self.first is not None
+
+    def start_time(self):
+        return self.first
+
+    def next_time(self, now):
+        return self.wait_for_change(now, 2)
+
+    def after_menu(self, now):
+        current = self.read()
+        if current is None:
+            return None, False
+        return current, True
+
+
+class Screen:
+    def __init__(self):
+        self.face = ClockFace()
+
+    def big_text(self, text):
+        rows = ["", "", ""]
+        for char in text:
+            for index in range(3):
+                rows[index] += DIGITS[char][index] + " "
+        return rows
+
+    def status_line(self, label, value, color):
+        return "     " + BOLD + (label + ":").ljust(12) + RESET + color + value + RESET
+
+    def status_lines(self, app):
+        value, color = app.source.status()
+        lines = [self.status_line("Time", value, color)]
+        for feature in app.features:
+            value, color = feature.status()
+            lines.append(self.status_line(feature.name, value, color))
+        return lines
+
+    def banner(self, text, now):
+        style = YELLOW + BOLD + (REVERSE if now % 2 == 0 else "")
+        return center(style + "  " + text + "  " + RESET, len(text) + 4)
+
+    def build(self, app):
+        lines = [center(BOLD + CYAN + "PYTHON CLOCK" + RESET, 12), ""]
+        lines += self.face.render(app.now)
         lines.append("")
-    lines.append(center(DIM + "Press Ctrl+C to open the menu" + RESET, 29))
-    return "\n".join(lines)
+        for row in self.big_text(format_seconds(app.now)):
+            lines.append(center(BOLD + WHITE + row + RESET, len(row)))
+        lines.append("")
+        legend = CYAN + "# hour" + RESET + "   " + GREEN + "* minute" + RESET + "   " + RED + ". second" + RESET
+        lines.append(center(legend, 28))
+        lines.append("")
+        lines += self.status_lines(app)
+        lines.append("")
+        ringing = app.ringing()
+        lines.append(self.banner(ringing.message, app.now) if ringing else "")
+        lines.append(center(DIM + "Press Ctrl+C to open the menu" + RESET, 29))
+        return "\n".join(lines)
+
+
+class Menu:
+    def __init__(self, app):
+        self.app = app
+
+    def options(self):
+        app = self.app
+        return [
+            ("Set alarm" if app.alarm.time is None else "Change alarm", self.set_alarm),
+            ("Remove alarm", self.remove_alarm),
+            ("Stop stopwatch" if app.stopwatch.running else "Start stopwatch", self.toggle_stopwatch),
+            ("Reset stopwatch", self.reset_stopwatch),
+            ("Set timer" if app.timer.remaining is None else "Change timer", self.set_timer),
+            ("Cancel timer", self.cancel_timer),
+            ("Back to clock", None),
+            ("Quit", None),
+        ]
+
+    def set_alarm(self):
+        self.app.alarm.set(ask("Alarm time (HH:MM, e.g. 07:30): ", parse_time))
+        return "Alarm set to " + format_seconds(self.app.alarm.time)
+
+    def remove_alarm(self):
+        return "Alarm removed" if self.app.alarm.remove() else "There is no alarm to remove"
+
+    def toggle_stopwatch(self):
+        if self.app.stopwatch.toggle():
+            return "Stopwatch started"
+        return "Stopwatch stopped at " + format_seconds(self.app.stopwatch.elapsed)
+
+    def reset_stopwatch(self):
+        self.app.stopwatch.reset()
+        return "Stopwatch reset to 00:00:00"
+
+    def set_timer(self):
+        self.app.timer.set(ask("Timer length (MM:SS or HH:MM:SS, e.g. 05:00): ", parse_duration))
+        return "Timer set to " + format_seconds(self.app.timer.remaining)
+
+    def cancel_timer(self):
+        return "Timer cancelled" if self.app.timer.cancel() else "There is no timer to cancel"
+
+    def show(self, options, message):
+        note = DIM + "(" + self.app.source.menu_note + ")" + RESET
+        print(CLEAR + BOLD + CYAN + "MENU" + RESET + "  " + note + "\n")
+        print("\n".join(self.app.screen.status_lines(self.app)) + "\n")
+        for number in range(len(options)):
+            print("  " + BOLD + str(number + 1) + ")" + RESET + " " + options[number][0])
+        print()
+        if message:
+            print(GREEN + "  " + message + RESET + "\n")
+
+    def run(self):
+        self.app.silence()
+        message = ""
+        while True:
+            options = self.options()
+            self.show(options, message)
+            choice = input("Choose an option (1-%d): " % len(options)).strip()
+            if not choice.isdigit() or not 1 <= int(choice) <= len(options):
+                message = YELLOW + "Please type a number from 1 to %d" % len(options)
+                continue
+            label, action = options[int(choice) - 1]
+            if label == "Quit":
+                return False
+            if label == "Back to clock":
+                return True
+            message = action()
+
+
+class ClockApp:
+    def __init__(self, source, now):
+        self.source = source
+        self.now = now
+        self.alarm = Alarm()
+        self.stopwatch = Stopwatch()
+        self.timer = Timer()
+        self.features = [self.alarm, self.stopwatch, self.timer]
+        self.screen = Screen()
+        self.menu = Menu(self)
+
+    def move_to(self, new_now, count=True):
+        elapsed = (new_now - self.now) % DAY
+        if count and elapsed <= DAY // 2:
+            for feature in self.features:
+                feature.advance(self.now, elapsed)
+        self.now = new_now
+
+    def ringing(self):
+        for feature in self.features:
+            if isinstance(feature, Ringer) and feature.is_ringing():
+                return feature
+        return None
+
+    def silence(self):
+        for feature in self.features:
+            if isinstance(feature, Ringer):
+                feature.silence()
+
+    def fall_back_to_manual(self):
+        self.source = ManualTime()
+
+    def tick(self):
+        new_now = self.source.next_time(self.now)
+        if new_now is None:
+            self.fall_back_to_manual()
+            new_now = self.source.next_time(self.now)
+        self.move_to(new_now)
+
+    def run_clock(self):
+        print(HIDE_CURSOR, end="")
+        try:
+            while True:
+                bell = "\a" if self.ringing() else ""
+                print(CLEAR + self.screen.build(self) + bell, flush=True)
+                self.tick()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            print(SHOW_CURSOR + RESET)
+
+    def resume(self):
+        new_now, count = self.source.after_menu(self.now)
+        if new_now is None:
+            self.fall_back_to_manual()
+            new_now, count = self.source.after_menu(self.now)
+        self.move_to(new_now, count)
+
+    def run(self):
+        while True:
+            self.run_clock()
+            if not self.menu.run():
+                return
+            self.resume()
 
 
 def close(a, b):
@@ -271,181 +572,23 @@ def self_test():
     assert parse_duration("00:00")[0] is None
     assert format_seconds(50700) == "14:05:00"
     assert format_seconds(86400) == "00:00:00"
-    state = new_state(86399)
-    state["alarm"] = 0
-    advance(state)
-    assert state["now"] == 0 and state["alarm_ring"] == RING_SECONDS
-    advance(state)
-    assert state["alarm_ring"] == RING_SECONDS - 1
-    toggle_stopwatch(state)
-    advance(state)
-    assert state["stopwatch"] == 1
-    reset_stopwatch(state)
-    advance(state)
-    assert state["stopwatch"] == 0
-    state["timer"] = 2
-    advance(state)
-    assert state["timer"] == 1 and state["timer_ring"] == 0
-    advance(state)
-    assert state["timer"] is None and state["timer_ring"] == RING_SECONDS
-    state = new_state(100)
-    state["alarm"] = 103
-    state["timer"] = 3
-    toggle_stopwatch(state)
-    advance(state, 5)
-    assert state["now"] == 105 and state["stopwatch"] == 5
-    assert state["alarm_ring"] == RING_SECONDS and state["timer_ring"] == RING_SECONDS
-    advance(state, 86300)
-    assert state["now"] == 5 and state["alarm_ring"] == 0
-
-
-LOOPS_PER_SECOND = 165000000
-
-CLEAR = "\033[H\033[2J\033[3J"
-HIDE_CURSOR = "\033[?25l"
-SHOW_CURSOR = "\033[?25h"
-
-
-SYNC_FILE = ".now"
-POLLS_PER_SECOND = 20
-
-
-def spin(loops):
-    for _ in range(loops):
-        pass
-
-
-def read_computer_time():
-    try:
-        with open(SYNC_FILE) as file:
-            return parse_time(file.read())[0]
-    except OSError:
-        return None
-
-
-def wait_for_computer_time(previous, seconds):
-    for _ in range(seconds * POLLS_PER_SECOND):
-        spin(LOOPS_PER_SECOND // POLLS_PER_SECOND)
-        now = read_computer_time()
-        if now is not None and now != previous:
-            return now
-    return None
-
-
-def elapsed_until(state, now):
-    elapsed = (now - state["now"]) % 86400
-    if elapsed > 43200:
-        state["now"] = now
-        return 0
-    return elapsed
-
-
-def wait_next_second(state):
-    if state["synced"]:
-        now = wait_for_computer_time(state["now"], 2)
-        if now is not None:
-            return elapsed_until(state, now)
-        state["synced"] = False
-    spin(LOOPS_PER_SECOND)
-    return 1
-
-
-def run_clock(state):
-    print(HIDE_CURSOR, end="")
-    try:
-        while True:
-            bell = "\a" if state["alarm_ring"] > 0 or state["timer_ring"] > 0 else ""
-            print(CLEAR + build_screen(state) + bell, flush=True)
-            advance(state, wait_next_second(state))
-    except KeyboardInterrupt:
-        pass
-    finally:
-        print(SHOW_CURSOR + RESET)
-
-
-def menu_options(state):
-    return [
-        ("Set alarm" if state["alarm"] is None else "Change alarm", set_alarm),
-        ("Remove alarm", remove_alarm),
-        ("Stop stopwatch" if state["stopwatch_on"] else "Start stopwatch", toggle_stopwatch),
-        ("Reset stopwatch", reset_stopwatch),
-        ("Set timer" if state["timer"] is None else "Change timer", set_timer),
-        ("Cancel timer", cancel_timer),
-        ("Back to clock", None),
-        ("Quit", None),
-    ]
-
-
-def set_alarm(state):
-    state["alarm"] = ask("Alarm time (HH:MM, e.g. 07:30): ", parse_time)
-    return "Alarm set to " + format_seconds(state["alarm"])
-
-
-def remove_alarm(state):
-    if state["alarm"] is None:
-        return "There is no alarm to remove"
-    state["alarm"] = None
-    return "Alarm removed"
-
-
-def toggle_stopwatch(state):
-    state["stopwatch_on"] = not state["stopwatch_on"]
-    return "Stopwatch started" if state["stopwatch_on"] else "Stopwatch stopped at " + format_seconds(state["stopwatch"])
-
-
-def reset_stopwatch(state):
-    state["stopwatch"] = 0
-    state["stopwatch_on"] = False
-    return "Stopwatch reset to 00:00:00"
-
-
-def set_timer(state):
-    state["timer"] = ask("Timer length (MM:SS or HH:MM:SS, e.g. 05:00): ", parse_duration)
-    return "Timer set to " + format_seconds(state["timer"])
-
-
-def cancel_timer(state):
-    if state["timer"] is None:
-        return "There is no timer to cancel"
-    state["timer"] = None
-    return "Timer cancelled"
-
-
-def menu(state):
-    state["alarm_ring"] = 0
-    state["timer_ring"] = 0
-    message = ""
-    while True:
-        options = menu_options(state)
-        note = "the clock keeps running" if state["synced"] else "the clock is paused while the menu is open"
-        print(CLEAR + BOLD + CYAN + "MENU" + RESET + "  " + DIM + "(" + note + ")" + RESET + "\n")
-        print("\n".join(status_lines(state)) + "\n")
-        for number in range(len(options)):
-            print("  " + BOLD + str(number + 1) + ")" + RESET + " " + options[number][0])
-        print()
-        if message:
-            print(GREEN + "  " + message + RESET + "\n")
-        choice = input("Choose an option (1-%d): " % len(options)).strip()
-        if not choice.isdigit() or not 1 <= int(choice) <= len(options):
-            message = YELLOW + "Please type a number from 1 to %d" % len(options)
-            continue
-        label, action = options[int(choice) - 1]
-        if label == "Quit":
-            return False
-        if label == "Back to clock" and state["synced"]:
-            now = read_computer_time()
-            if now is None:
-                state["synced"] = False
-            else:
-                advance(state, elapsed_until(state, now))
-                return True
-        if label == "Back to clock":
-            text = "Current time (HH:MM or HH:MM:SS, Enter to keep " + format_seconds(state["now"]) + "): "
-            now = ask(text, parse_time, True)
-            if now is not None:
-                state["now"] = now
-            return True
-        message = action(state)
+    app = ClockApp(TimeSource(), 86399)
+    app.alarm.set(0)
+    app.move_to(0)
+    assert app.ringing() is app.alarm and app.alarm.ring_left == Ringer.RING_SECONDS
+    app.move_to(1)
+    assert app.alarm.ring_left == Ringer.RING_SECONDS - 1
+    app.silence()
+    assert app.ringing() is None
+    app.stopwatch.toggle()
+    app.timer.set(3)
+    app.move_to(6)
+    assert app.stopwatch.elapsed == 5 and app.ringing() is app.timer and app.timer.remaining is None
+    app.stopwatch.reset()
+    app.move_to(5)
+    assert app.now == 5 and app.stopwatch.elapsed == 0
+    app.move_to(10, False)
+    assert app.now == 10 and app.timer.ring_left == Ringer.RING_SECONDS
 
 
 def main():
@@ -453,17 +596,13 @@ def main():
     print(CLEAR + BOLD + CYAN + "PYTHON CLOCK" + RESET + "\n")
     try:
         print(DIM + "Looking for your computer time..." + RESET)
-        now = wait_for_computer_time(read_computer_time(), 2)
-        if now is None:
-            print(YELLOW + "Not found. See README.md to sync automatically." + RESET + "\n")
-            state = new_state(ask("Current time (HH:MM or HH:MM:SS, e.g. 14:05): ", parse_time))
+        source = SyncedTime()
+        if source.connect():
+            print(GREEN + "Time synced with your computer: " + format_seconds(source.start_time()) + RESET + "\n")
         else:
-            print(GREEN + "Time synced with your computer: " + format_seconds(now) + RESET + "\n")
-            state = new_state(now, True)
-        while True:
-            run_clock(state)
-            if not menu(state):
-                break
+            print(YELLOW + "Not found. See README.md to sync automatically." + RESET + "\n")
+            source = ManualTime()
+        ClockApp(source, source.start_time()).run()
     except (KeyboardInterrupt, EOFError):
         print()
     print(SHOW_CURSOR + RESET + "Goodbye!")
