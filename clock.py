@@ -278,17 +278,68 @@ def run_clock(state):
         print(SHOW_CURSOR + RESET)
 
 
+def menu_options(state):
+    return [
+        ("Set alarm" if state["alarm"] is None else "Change alarm", set_alarm),
+        ("Remove alarm", remove_alarm),
+        ("Back to clock", None),
+        ("Quit", None),
+    ]
+
+
+def set_alarm(state):
+    state["alarm"] = ask("Alarm time (HH:MM, e.g. 07:30): ", parse_time)
+    return "Alarm set to " + format_seconds(state["alarm"])
+
+
+def remove_alarm(state):
+    if state["alarm"] is None:
+        return "There is no alarm to remove"
+    state["alarm"] = None
+    return "Alarm removed"
+
+
+def menu(state):
+    state["alarm_ring"] = 0
+    message = ""
+    while True:
+        options = menu_options(state)
+        print(CLEAR + BOLD + CYAN + "MENU" + RESET + "  " + DIM + "(the clock is paused while the menu is open)" + RESET + "\n")
+        print("\n".join(status_lines(state)) + "\n")
+        for number in range(len(options)):
+            print("  " + BOLD + str(number + 1) + ")" + RESET + " " + options[number][0])
+        print()
+        if message:
+            print(GREEN + "  " + message + RESET + "\n")
+        choice = input("Choose an option (1-%d): " % len(options)).strip()
+        if not choice.isdigit() or not 1 <= int(choice) <= len(options):
+            message = YELLOW + "Please type a number from 1 to %d" % len(options)
+            continue
+        label, action = options[int(choice) - 1]
+        if label == "Quit":
+            return False
+        if label == "Back to clock":
+            text = "Current time (HH:MM or HH:MM:SS, Enter to keep " + format_seconds(state["now"]) + "): "
+            now = ask(text, parse_time, True)
+            if now is not None:
+                state["now"] = now
+            return True
+        message = action(state)
+
+
 def main():
     self_test()
     print(CLEAR + BOLD + CYAN + "PYTHON CLOCK" + RESET + "\n")
     try:
         state = new_state(ask("Current time (HH:MM or HH:MM:SS, e.g. 14:05): ", parse_time))
         state["alarm"] = ask("Alarm time (HH:MM, e.g. 07:30, or Enter for no alarm): ", parse_time, True)
+        while True:
+            run_clock(state)
+            if not menu(state):
+                break
     except (KeyboardInterrupt, EOFError):
-        print("\nGoodbye!")
-        return
-    run_clock(state)
-    print("Goodbye!")
+        print()
+    print(SHOW_CURSOR + RESET + "Goodbye!")
 
 
 if __name__ == "__main__":
