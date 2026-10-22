@@ -165,7 +165,7 @@ REVERSE = "\033[7m"
 
 
 def new_state(now):
-    return {"now": now, "alarm": None, "alarm_ring": 0, "stopwatch": 0, "stopwatch_on": False}
+    return {"now": now, "alarm": None, "alarm_ring": 0, "stopwatch": 0, "stopwatch_on": False, "timer": None, "timer_ring": 0}
 
 
 def advance(state):
@@ -176,6 +176,13 @@ def advance(state):
         state["alarm_ring"] = RING_SECONDS
     if state["stopwatch_on"]:
         state["stopwatch"] += 1
+    if state["timer_ring"] > 0:
+        state["timer_ring"] -= 1
+    if state["timer"] is not None:
+        state["timer"] -= 1
+        if state["timer"] == 0:
+            state["timer"] = None
+            state["timer_ring"] = RING_SECONDS
 
 
 def status_line(label, value, color):
@@ -191,7 +198,11 @@ def status_lines(state):
         stopwatch = status_line("Stopwatch", format_seconds(state["stopwatch"]) + "  running", GREEN)
     else:
         stopwatch = status_line("Stopwatch", format_seconds(state["stopwatch"]) + "  stopped", DIM)
-    return [alarm, stopwatch]
+    if state["timer"] is None:
+        timer = status_line("Timer", "off", DIM)
+    else:
+        timer = status_line("Timer", format_seconds(state["timer"]) + "  left", YELLOW)
+    return [alarm, stopwatch, timer]
 
 
 def banner(text, now):
@@ -214,6 +225,8 @@ def build_screen(state):
     lines.append("")
     if state["alarm_ring"] > 0:
         lines.append(banner("ALARM!  Press Ctrl+C to stop", now))
+    elif state["timer_ring"] > 0:
+        lines.append(banner("TIME UP!  Press Ctrl+C to stop", now))
     else:
         lines.append("")
     lines.append(center(DIM + "Press Ctrl+C to open the menu" + RESET, 29))
@@ -258,6 +271,11 @@ def self_test():
     reset_stopwatch(state)
     advance(state)
     assert state["stopwatch"] == 0
+    state["timer"] = 2
+    advance(state)
+    assert state["timer"] == 1 and state["timer_ring"] == 0
+    advance(state)
+    assert state["timer"] is None and state["timer_ring"] == RING_SECONDS
 
 
 LOOPS_PER_SECOND = 165000000
@@ -280,7 +298,7 @@ def run_clock(state):
     print(HIDE_CURSOR, end="")
     try:
         while True:
-            bell = "\a" if state["alarm_ring"] > 0 else ""
+            bell = "\a" if state["alarm_ring"] > 0 or state["timer_ring"] > 0 else ""
             print(CLEAR + build_screen(state) + bell, flush=True)
             wait_one_second()
             advance(state)
@@ -296,6 +314,8 @@ def menu_options(state):
         ("Remove alarm", remove_alarm),
         ("Stop stopwatch" if state["stopwatch_on"] else "Start stopwatch", toggle_stopwatch),
         ("Reset stopwatch", reset_stopwatch),
+        ("Set timer" if state["timer"] is None else "Change timer", set_timer),
+        ("Cancel timer", cancel_timer),
         ("Back to clock", None),
         ("Quit", None),
     ]
@@ -324,8 +344,21 @@ def reset_stopwatch(state):
     return "Stopwatch reset to 00:00:00"
 
 
+def set_timer(state):
+    state["timer"] = ask("Timer length (MM:SS or HH:MM:SS, e.g. 05:00): ", parse_duration)
+    return "Timer set to " + format_seconds(state["timer"])
+
+
+def cancel_timer(state):
+    if state["timer"] is None:
+        return "There is no timer to cancel"
+    state["timer"] = None
+    return "Timer cancelled"
+
+
 def menu(state):
     state["alarm_ring"] = 0
+    state["timer_ring"] = 0
     message = ""
     while True:
         options = menu_options(state)
