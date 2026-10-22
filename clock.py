@@ -409,7 +409,12 @@ class Screen:
         lines += self.status_lines(app)
         lines.append("")
         ringing = app.ringing()
-        lines.append(self.banner(ringing.message, app.now) if ringing else "")
+        if ringing:
+            lines.append(self.banner(ringing.message, app.now))
+        elif app.notice_left > 0:
+            lines.append(center(GREEN + BOLD + app.notice + RESET, len(app.notice)))
+        else:
+            lines.append("")
         lines.append(center(DIM + "Press Ctrl+C to open the menu" + RESET, 29))
         return "\n".join(lines)
 
@@ -462,7 +467,7 @@ class Menu:
             print("  " + BOLD + str(number + 1) + ")" + RESET + " " + options[number][0])
         print()
         if message:
-            print(GREEN + "  " + message + RESET + "\n")
+            print(YELLOW + "  " + message + RESET + "\n")
 
     def run(self):
         self.app.silence()
@@ -470,16 +475,19 @@ class Menu:
         while True:
             options = self.options()
             self.show(options, message)
-            choice = input("Choose an option (1-%d): " % len(options)).strip()
+            choice = input("Choose an option (1-%d, Enter to go back): " % len(options)).strip()
+            if choice == "":
+                return True
             if not choice.isdigit() or not 1 <= int(choice) <= len(options):
-                message = YELLOW + "Please type a number from 1 to %d" % len(options)
+                message = "Please type a number from 1 to %d" % len(options)
                 continue
             label, action = options[int(choice) - 1]
             if label == "Quit":
                 return False
             if label == "Back to clock":
                 return True
-            message = action()
+            self.app.notify(action())
+            return True
 
 
 class ClockApp:
@@ -492,6 +500,12 @@ class ClockApp:
         self.features = [self.alarm, self.stopwatch, self.timer]
         self.screen = Screen()
         self.menu = Menu(self)
+        self.notice = ""
+        self.notice_left = 0
+
+    def notify(self, text):
+        self.notice = text
+        self.notice_left = 3
 
     def move_to(self, new_now, count=True):
         elapsed = (new_now - self.now) % DAY
@@ -528,6 +542,7 @@ class ClockApp:
                 bell = "\a" if self.ringing() else ""
                 print(CLEAR + self.screen.build(self) + bell, flush=True)
                 self.tick()
+                self.notice_left = max(0, self.notice_left - 1)
         except KeyboardInterrupt:
             pass
         finally:
