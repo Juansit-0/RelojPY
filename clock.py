@@ -168,19 +168,18 @@ def new_state(now):
     return {"now": now, "alarm": None, "alarm_ring": 0, "stopwatch": 0, "stopwatch_on": False, "timer": None, "timer_ring": 0}
 
 
-def advance(state):
-    state["now"] = tick(state["now"])
-    if state["alarm_ring"] > 0:
-        state["alarm_ring"] -= 1
-    if state["alarm"] is not None and state["now"] == state["alarm"]:
+def advance(state, seconds=1):
+    start = state["now"]
+    state["now"] = (start + seconds) % 86400
+    state["alarm_ring"] = max(0, state["alarm_ring"] - seconds)
+    state["timer_ring"] = max(0, state["timer_ring"] - seconds)
+    if state["alarm"] is not None and 0 < (state["alarm"] - start) % 86400 <= seconds:
         state["alarm_ring"] = RING_SECONDS
     if state["stopwatch_on"]:
-        state["stopwatch"] += 1
-    if state["timer_ring"] > 0:
-        state["timer_ring"] -= 1
+        state["stopwatch"] += seconds
     if state["timer"] is not None:
-        state["timer"] -= 1
-        if state["timer"] == 0:
+        state["timer"] -= seconds
+        if state["timer"] <= 0:
             state["timer"] = None
             state["timer_ring"] = RING_SECONDS
 
@@ -257,8 +256,6 @@ def self_test():
     assert parse_duration("00:00")[0] is None
     assert format_seconds(50700) == "14:05:00"
     assert format_seconds(86400) == "00:00:00"
-    assert tick(86399) == 0
-    assert tick(59) == 60
     state = new_state(86399)
     state["alarm"] = 0
     advance(state)
@@ -276,6 +273,15 @@ def self_test():
     assert state["timer"] == 1 and state["timer_ring"] == 0
     advance(state)
     assert state["timer"] is None and state["timer_ring"] == RING_SECONDS
+    state = new_state(100)
+    state["alarm"] = 103
+    state["timer"] = 3
+    toggle_stopwatch(state)
+    advance(state, 5)
+    assert state["now"] == 105 and state["stopwatch"] == 5
+    assert state["alarm_ring"] == RING_SECONDS and state["timer_ring"] == RING_SECONDS
+    advance(state, 86300)
+    assert state["now"] == 5 and state["alarm_ring"] == 0
 
 
 LOOPS_PER_SECOND = 165000000
@@ -288,10 +294,6 @@ SHOW_CURSOR = "\033[?25h"
 def wait_one_second():
     for _ in range(LOOPS_PER_SECOND):
         pass
-
-
-def tick(seconds_of_day):
-    return (seconds_of_day + 1) % 86400
 
 
 def run_clock(state):
