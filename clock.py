@@ -165,7 +165,7 @@ REVERSE = "\033[7m"
 
 
 def new_state(now):
-    return {"now": now, "alarm": None, "alarm_ring": 0}
+    return {"now": now, "alarm": None, "alarm_ring": 0, "stopwatch": 0, "stopwatch_on": False}
 
 
 def advance(state):
@@ -174,6 +174,8 @@ def advance(state):
         state["alarm_ring"] -= 1
     if state["alarm"] is not None and state["now"] == state["alarm"]:
         state["alarm_ring"] = RING_SECONDS
+    if state["stopwatch_on"]:
+        state["stopwatch"] += 1
 
 
 def status_line(label, value, color):
@@ -185,7 +187,11 @@ def status_lines(state):
         alarm = status_line("Alarm", "off", DIM)
     else:
         alarm = status_line("Alarm", format_seconds(state["alarm"]), YELLOW)
-    return [alarm]
+    if state["stopwatch_on"]:
+        stopwatch = status_line("Stopwatch", format_seconds(state["stopwatch"]) + "  running", GREEN)
+    else:
+        stopwatch = status_line("Stopwatch", format_seconds(state["stopwatch"]) + "  stopped", DIM)
+    return [alarm, stopwatch]
 
 
 def banner(text, now):
@@ -246,6 +252,12 @@ def self_test():
     assert state["now"] == 0 and state["alarm_ring"] == RING_SECONDS
     advance(state)
     assert state["alarm_ring"] == RING_SECONDS - 1
+    toggle_stopwatch(state)
+    advance(state)
+    assert state["stopwatch"] == 1
+    reset_stopwatch(state)
+    advance(state)
+    assert state["stopwatch"] == 0
 
 
 LOOPS_PER_SECOND = 165000000
@@ -282,6 +294,8 @@ def menu_options(state):
     return [
         ("Set alarm" if state["alarm"] is None else "Change alarm", set_alarm),
         ("Remove alarm", remove_alarm),
+        ("Stop stopwatch" if state["stopwatch_on"] else "Start stopwatch", toggle_stopwatch),
+        ("Reset stopwatch", reset_stopwatch),
         ("Back to clock", None),
         ("Quit", None),
     ]
@@ -297,6 +311,17 @@ def remove_alarm(state):
         return "There is no alarm to remove"
     state["alarm"] = None
     return "Alarm removed"
+
+
+def toggle_stopwatch(state):
+    state["stopwatch_on"] = not state["stopwatch_on"]
+    return "Stopwatch started" if state["stopwatch_on"] else "Stopwatch stopped at " + format_seconds(state["stopwatch"])
+
+
+def reset_stopwatch(state):
+    state["stopwatch"] = 0
+    state["stopwatch_on"] = False
+    return "Stopwatch reset to 00:00:00"
 
 
 def menu(state):
