@@ -449,7 +449,6 @@ def main():
         else:
             print(GREEN + "Time synced with your computer: " + format_seconds(now) + RESET + "\n")
             state = new_state(now, True)
-        state["alarm"] = ask("Alarm time (HH:MM, e.g. 07:30, or Enter for no alarm): ", parse_time, True)
         while True:
             run_clock(state)
             if not menu(state):
